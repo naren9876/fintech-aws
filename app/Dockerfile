@@ -13,6 +13,9 @@ RUN npm ci --only=production && \
 # ============= RUNTIME STAGE =============
 FROM node:22-alpine
 
+# Upgrade bundled npm - its internal tar carries CVE-2026-59874/73566 until latest
+RUN npm install -g npm@latest
+
 # Install dumb-init to handle signals properly
 RUN apk add --no-cache dumb-init curl
 
