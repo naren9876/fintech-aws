@@ -1,0 +1,133 @@
+name: App Build Scan Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-build-deploy.yml'
+
+permissions:
+  id-token: write # keyless OIDC auth
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPO: fintech-auth-service
+  CLUSTER: fintech-dev-cluster
+  SERVICE: fintech-dev-auth
+  TASK_FAMILY: fintech-dev-auth
+  CONTAINER_NAME: auth-service
+
+jobs:
+  build-scan-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # ---------- CI: test ----------
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        working-directory: app
+        run: npm ci || npm install
+
+      - name: Unit tests
+        working-directory: app
+        run: npx jest --passWithNoTests
+
+      # ---------- Auth (keyless) ----------
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ---------- Build ----------
+      - name: Build image (tagged with git SHA - never deploy "latest")
+        working-directory: app
+        run: |
+          IMAGE="${{ steps.ecr.outputs.registry }}/${ECR_REPO}:${GITHUB_SHA}"
+          docker build -t "$IMAGE" .
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      # ---------- Security gate: the pipeline can say NO ----------
+      - name: Trivy scan (CRITICAL/HIGH fail the build)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+
+      # ---------- Push (only a clean image ever reaches the registry) ----------
+      - name: Push to ECR
+        run: |
+          docker push "$IMAGE"
+          # ":latest" exists ONLY so Terraform's initial task definition can bootstrap;
+          # every real deploy below pins the immutable git SHA.
+          docker tag "$IMAGE" "${{ steps.ecr.outputs.registry }}/${ECR_REPO}:latest"
+          docker push "${{ steps.ecr.outputs.registry }}/${ECR_REPO}:latest"
+
+      # ---------- Deploy: new task-definition revision -> service update ----------
+      - name: Deploy to ECS (skips gracefully until Phase 3 creates the service)
+        run: |
+          if ! aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+               --query 'services[?status==`ACTIVE`]' --output text | grep -q .; then
+            echo "ECS service not present yet (pre-Phase-3). Image pushed; skipping deploy."
+            exit 0
+          fi
+
+          echo "Registering new task definition revision with image $IMAGE"
+          aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
+            --query 'taskDefinition' > td.json
+
+          jq --arg IMAGE "$IMAGE" --arg NAME "$CONTAINER_NAME" '
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                .compatibilities, .registeredAt, .registeredBy)
+            | .containerDefinitions |= map(if .name == $NAME then .image = $IMAGE else . end)
+          ' td.json > td-new.json
+
+          NEW_ARN=$(aws ecs register-task-definition --cli-input-json file://td-new.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+            --task-definition "$NEW_ARN" > /dev/null
+
+          echo "Waiting for the deployment to stabilize (circuit breaker rolls back on failure)..."
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+
+      # ---------- Verify: hit the real /health through the ALB ----------
+      - name: Post-deploy health verification
+        run: |
+          if ! aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+               --query 'services[?status==`ACTIVE`]' --output text | grep -q .; then
+            echo "No service yet - nothing to verify."
+            exit 0
+          fi
+
+          ALB=$(aws elbv2 describe-load-balancers --names fintech-dev-alb \
+            --query 'LoadBalancers[0].DNSName' --output text)
+
+          echo "Verifying http://$ALB/health"
+          for i in $(seq 1 10); do
+            if curl -fsS "http://$ALB/health"; then
+              echo ""
+              echo "Deployment verified healthy."
+              exit 0
+            fi
+            echo "Attempt $i failed; retrying in 15s..."
+            sleep 15
+          done
+          echo "Health verification FAILED after 10 attempts."
+          exit 1

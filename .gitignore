@@ -1,0 +1,12 @@
+__pycache__/
+node_modules/
+.env*
+*.pem
+.DS_Store
+.terraform/
+*.tfstate
+*.tfstate.backup
+tfplan
+plan.txt
+coverage/
+.idea/
