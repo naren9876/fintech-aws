@@ -1,5 +1,5 @@
 # ============= BUILD STAGE =============
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ RUN npm ci --only=production && \
     npm cache clean --force
 
 # ============= RUNTIME STAGE =============
-FROM node:18-alpine
+FROM node:22-alpine
 
 # Install dumb-init to handle signals properly
 RUN apk add --no-cache dumb-init curl
