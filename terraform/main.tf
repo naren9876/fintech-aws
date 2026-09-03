@@ -141,14 +141,14 @@ module "ecs" {
 # (uncomment in the Phase 4 pull request)
 # ============================================================
 
-# module "monitoring" {
-#   source = "./modules/monitoring"
-#
-#   project_name     = var.project_name
-#   environment      = var.environment
-#   aws_region       = var.aws_region
-#   alert_email      = var.alert_email
-#   alb_arn_suffix   = module.ecs.alb_arn_suffix
-#   cluster_name     = module.ecs.cluster_name
-#   service_name     = module.ecs.service_name
-# }
+module "monitoring" {
+  source = "./modules/monitoring"
+  #
+  project_name   = var.project_name
+  environment    = var.environment
+  aws_region     = var.aws_region
+  alert_email    = var.alert_email
+  alb_arn_suffix = module.ecs.alb_arn_suffix
+  cluster_name   = module.ecs.cluster_name
+  service_name   = module.ecs.service_name
+}
