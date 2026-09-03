@@ -116,25 +116,25 @@ module "elasticache" {
 # (uncomment in the Phase 3 pull request)
 # ============================================================
 
-# module "ecs" {
-#   source = "./modules/ecs"
-#
-#   project_name       = var.project_name
-#   environment        = var.environment
-#   aws_region         = var.aws_region
-#   container_port     = var.container_port
-#   ecr_repository_url = aws_ecr_repository.auth_service.repository_url
-#
-#   vpc_id                = module.network.vpc_id
-#   public_subnet_ids     = module.network.public_subnet_ids
-#   private_subnet_ids    = module.network.private_subnet_ids
-#   alb_security_group_id = module.network.alb_security_group_id
-#   app_security_group_id = module.network.app_security_group_id
-#
-#   database_url_secret_arn = module.rds.database_url_secret_arn
-#   redis_url_secret_arn    = module.elasticache.redis_url_secret_arn
-#   jwt_secret_arn          = module.secrets.jwt_secret_arn
-# }
+module "ecs" {
+  source = "./modules/ecs"
+
+  project_name       = var.project_name
+  environment        = var.environment
+  aws_region         = var.aws_region
+  container_port     = var.container_port
+  ecr_repository_url = aws_ecr_repository.auth_service.repository_url
+
+  vpc_id                = module.network.vpc_id
+  public_subnet_ids     = module.network.public_subnet_ids
+  private_subnet_ids    = module.network.private_subnet_ids
+  alb_security_group_id = module.network.alb_security_group_id
+  app_security_group_id = module.network.app_security_group_id
+
+  database_url_secret_arn = module.rds.database_url_secret_arn
+  redis_url_secret_arn    = module.elasticache.redis_url_secret_arn
+  jwt_secret_arn          = module.secrets.jwt_secret_arn
+}
 
 # ============================================================
 # PHASE 4 - Observability: dashboard + alarms
