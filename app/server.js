@@ -143,8 +143,7 @@ async function initializeDatabase() {
           mfa_enabled BOOLEAN DEFAULT FALSE,
           last_login TIMESTAMP,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          INDEX idx_email (email)
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
 
@@ -156,9 +155,7 @@ async function initializeDatabase() {
           token VARCHAR(500) NOT NULL UNIQUE,
           expires_at TIMESTAMP NOT NULL,
           revoked BOOLEAN DEFAULT FALSE,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          INDEX idx_user_id (user_id),
-          INDEX idx_expires_at (expires_at)
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
 
@@ -172,11 +169,16 @@ async function initializeDatabase() {
           user_agent TEXT,
           status VARCHAR(50),
           details JSONB,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          INDEX idx_user_id (user_id),
-          INDEX idx_created_at (created_at)
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
+
+      // Postgres: indexes are separate statements (inline INDEX is MySQL-only)
+      await client.query('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_rt_user_id ON refresh_tokens(user_id)');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_rt_expires_at ON refresh_tokens(expires_at)');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_audit_user_id ON auth_audit_log(user_id)');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_audit_created_at ON auth_audit_log(created_at)');
 
       logger.info('Database tables created/verified successfully');
     } finally {
