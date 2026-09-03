@@ -17,7 +17,7 @@ FROM node:22-alpine
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # Install dumb-init to handle signals properly
-RUN apk add --no-cache dumb-init curl
+RUN apk upgrade --no-cache && apk add --no-cache dumb-init curl
 
 # Create app directory
 WORKDIR /app
