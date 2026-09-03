@@ -85,7 +85,7 @@ resource "aws_ecr_lifecycle_policy" "auth_service" {
 # ============================================================
 
 module "secrets" {
-source = "./modules/secrets"
+  source = "./modules/secrets"
 
   project_name = var.project_name
   environment  = var.environment
