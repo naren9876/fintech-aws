@@ -87,7 +87,7 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   store: new (require('rate-limit-redis'))({
-    client: redisClient,
+    sendCommand: (...args) => redisClient.sendCommand(args),
     prefix: 'rate-limit:',
   }),
 });
@@ -97,7 +97,7 @@ const loginLimiter = rateLimit({
   max: 5, // 5 attempts per 15 minutes
   skipSuccessfulRequests: true,
   store: new (require('rate-limit-redis'))({
-    client: redisClient,
+    sendCommand: (...args) => redisClient.sendCommand(args),
     prefix: 'login-limit:',
   }),
 });
