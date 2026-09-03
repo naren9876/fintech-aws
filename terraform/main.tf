@@ -84,32 +84,32 @@ resource "aws_ecr_lifecycle_policy" "auth_service" {
 # (uncomment in the Phase 2 pull request)
 # ============================================================
 
-# module "secrets" {
-#   source = "./modules/secrets"
-#
-#   project_name = var.project_name
-#   environment  = var.environment
-# }
-#
-# module "rds" {
-#   source = "./modules/rds"
-#
-#   project_name      = var.project_name
-#   environment       = var.environment
-#   db_name           = var.db_name
-#   db_username       = var.db_username
-#   subnet_ids        = module.network.private_subnet_ids
-#   security_group_id = module.network.db_security_group_id
-# }
-#
-# module "elasticache" {
-#   source = "./modules/elasticache"
-#
-#   project_name      = var.project_name
-#   environment       = var.environment
-#   subnet_ids        = module.network.private_subnet_ids
-#   security_group_id = module.network.redis_security_group_id
-# }
+module "secrets" {
+  source = "./modules/secrets"
+
+  project_name = var.project_name
+  environment  = var.environment
+}
+
+module "rds" {
+  source = "./modules/rds"
+
+  project_name      = var.project_name
+  environment       = var.environment
+  db_name           = var.db_name
+  db_username       = var.db_username
+  subnet_ids        = module.network.private_subnet_ids
+  security_group_id = module.network.db_security_group_id
+}
+
+module "elasticache" {
+  source = "./modules/elasticache"
+
+  project_name      = var.project_name
+  environment       = var.environment
+  subnet_ids        = module.network.private_subnet_ids
+  security_group_id = module.network.redis_security_group_id
+}
 
 # ============================================================
 # PHASE 3 - Compute: ECS Fargate service + ALB
