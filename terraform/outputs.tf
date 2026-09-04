@@ -5,7 +5,7 @@ output "vpc_id" {
 }
 
 output "ecr_repository_url" {
-  value = aws_ecr_repository.auth_service.repository_url
+  value = local.ecr_repository_url
 }
 
 # ---- Phase 2 outputs (uncomment with the Phase 2 PR) ----
