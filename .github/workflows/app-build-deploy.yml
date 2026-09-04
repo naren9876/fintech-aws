@@ -8,22 +8,21 @@ on:
       - '.github/workflows/app-build-deploy.yml'
 
 permissions:
-  id-token: write # keyless OIDC auth
+  id-token: write
   contents: read
 
 env:
   AWS_REGION: us-east-1
   ECR_REPO: fintech-auth-service
-  CLUSTER: fintech-dev-cluster
-  SERVICE: fintech-dev-auth
-  TASK_FAMILY: fintech-dev-auth
   CONTAINER_NAME: auth-service
 
 jobs:
-  build-scan-deploy:
+  # ---------- BUILD ONCE: one certified image for every environment ----------
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
     steps:
-      # ---------- CI: test ----------
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -40,26 +39,25 @@ jobs:
         working-directory: app
         run: npx jest --passWithNoTests
 
-      # ---------- Auth (keyless) ----------
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::840080485121:role/github-actions-fintech
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # ---------- Build ----------
-      - name: Build image (tagged with git SHA - never deploy "latest")
+      - name: Build image (git-SHA tag)
+        id: meta
         working-directory: app
         run: |
           IMAGE="${{ steps.ecr.outputs.registry }}/${ECR_REPO}:${GITHUB_SHA}"
           docker build -t "$IMAGE" .
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
-      # ---------- Security gate: the pipeline can say NO ----------
       - name: Trivy scan (CRITICAL/HIGH fail the build)
         uses: aquasecurity/trivy-action@master
         with:
@@ -68,25 +66,42 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
 
-      # ---------- Push (only a clean image ever reaches the registry) ----------
       - name: Push to ECR
         run: |
           docker push "$IMAGE"
-          # ":latest" exists ONLY so Terraform's initial task definition can bootstrap;
-          # every real deploy below pins the immutable git SHA.
           docker tag "$IMAGE" "${{ steps.ecr.outputs.registry }}/${ECR_REPO}:latest"
           docker push "${{ steps.ecr.outputs.registry }}/${ECR_REPO}:latest"
 
-      # ---------- Deploy: new task-definition revision -> service update ----------
-      - name: Deploy to ECS (skips gracefully until Phase 3 creates the service)
+  # ---------- DEPLOY EVERYWHERE: same image, dev first, then staging ----------
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        env: [dev, staging]
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::840080485121:role/github-actions-fintech
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to ECS (${{ matrix.env }})
         run: |
+          CLUSTER="fintech-${{ matrix.env }}-cluster"
+          SERVICE="fintech-${{ matrix.env }}-auth"
+          TASK_FAMILY="fintech-${{ matrix.env }}-auth"
+          IMAGE="${{ needs.build.outputs.image }}"
+
           if ! aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
-               --query 'services[?status==`ACTIVE`]' --output text | grep -q .; then
-            echo "ECS service not present yet (pre-Phase-3). Image pushed; skipping deploy."
+               --query 'services[?status==`ACTIVE`]' --output text 2>/dev/null | grep -q .; then
+            echo "[${{ matrix.env }}] ECS service not present yet. Image pushed; skipping deploy."
             exit 0
           fi
 
-          echo "Registering new task definition revision with image $IMAGE"
+          echo "[${{ matrix.env }}] Registering task definition with $IMAGE"
           aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
             --query 'taskDefinition' > td.json
 
@@ -102,30 +117,32 @@ jobs:
           aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
             --task-definition "$NEW_ARN" > /dev/null
 
-          echo "Waiting for the deployment to stabilize (circuit breaker rolls back on failure)..."
+          echo "[${{ matrix.env }}] Waiting for stability (circuit breaker rolls back on failure)..."
           aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
 
-      # ---------- Verify: hit the real /health through the ALB ----------
-      - name: Post-deploy health verification
+      - name: Health verification (${{ matrix.env }})
         run: |
+          CLUSTER="fintech-${{ matrix.env }}-cluster"
+          SERVICE="fintech-${{ matrix.env }}-auth"
+
           if ! aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
-               --query 'services[?status==`ACTIVE`]' --output text | grep -q .; then
-            echo "No service yet - nothing to verify."
+               --query 'services[?status==`ACTIVE`]' --output text 2>/dev/null | grep -q .; then
+            echo "[${{ matrix.env }}] No service yet - nothing to verify."
             exit 0
           fi
 
-          ALB=$(aws elbv2 describe-load-balancers --names fintech-dev-alb \
+          ALB=$(aws elbv2 describe-load-balancers --names "fintech-${{ matrix.env }}-alb" \
             --query 'LoadBalancers[0].DNSName' --output text)
 
-          echo "Verifying http://$ALB/health"
+          echo "[${{ matrix.env }}] Verifying http://$ALB/health"
           for i in $(seq 1 10); do
             if curl -fsS "http://$ALB/health"; then
               echo ""
-              echo "Deployment verified healthy."
+              echo "[${{ matrix.env }}] Deployment verified healthy."
               exit 0
             fi
             echo "Attempt $i failed; retrying in 15s..."
             sleep 15
           done
-          echo "Health verification FAILED after 10 attempts."
+          echo "[${{ matrix.env }}] Health verification FAILED."
           exit 1
