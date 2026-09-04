@@ -27,7 +27,7 @@ provider "aws" {
 }
 
 # ============================================================
-# PHASE 1 - Foundation: network + container registry
+# Network + shared container registry
 # ============================================================
 
 module "network" {
@@ -39,18 +39,35 @@ module "network" {
   container_port = var.container_port
 }
 
+# ---- Shared ECR: "build once, deploy everywhere" ----
+# The dev environment OWNS the single registry; every other environment
+# READS it via a data source. All environments run the exact same
+# certified image - never a per-env rebuild.
+
 resource "aws_ecr_repository" "auth_service" {
+  count = var.environment == "dev" ? 1 : 0
+
   name                 = "${var.project_name}-auth-service"
   image_tag_mutability = "MUTABLE"
-  force_delete         = true # dev convenience; lesson from the msp-loyalty teardown
+  force_delete         = true
 
   image_scanning_configuration {
     scan_on_push = true
   }
 }
 
+# The repo previously existed without count; these moved blocks tell
+# Terraform "same resource, new address" so dev's plan stays a NO-OP
+# instead of destroy-and-recreate.
+moved {
+  from = aws_ecr_repository.auth_service
+  to   = aws_ecr_repository.auth_service[0]
+}
+
 resource "aws_ecr_lifecycle_policy" "auth_service" {
-  repository = aws_ecr_repository.auth_service.name
+  count = var.environment == "dev" ? 1 : 0
+
+  repository = aws_ecr_repository.auth_service[0].name
 
   policy = jsonencode({
     rules = [
@@ -79,9 +96,23 @@ resource "aws_ecr_lifecycle_policy" "auth_service" {
   })
 }
 
+moved {
+  from = aws_ecr_lifecycle_policy.auth_service
+  to   = aws_ecr_lifecycle_policy.auth_service[0]
+}
+
+data "aws_ecr_repository" "shared" {
+  count = var.environment == "dev" ? 0 : 1
+
+  name = "${var.project_name}-auth-service"
+}
+
+locals {
+  ecr_repository_url = var.environment == "dev" ? aws_ecr_repository.auth_service[0].repository_url : data.aws_ecr_repository.shared[0].repository_url
+}
+
 # ============================================================
-# PHASE 2 - Data layer: Postgres + Redis + app secrets
-# (uncomment in the Phase 2 pull request)
+# Data layer: Postgres + Redis + app secrets
 # ============================================================
 
 module "secrets" {
@@ -112,8 +143,7 @@ module "elasticache" {
 }
 
 # ============================================================
-# PHASE 3 - Compute: ECS Fargate service + ALB
-# (uncomment in the Phase 3 pull request)
+# Compute: ECS Fargate service + ALB
 # ============================================================
 
 module "ecs" {
@@ -123,7 +153,7 @@ module "ecs" {
   environment        = var.environment
   aws_region         = var.aws_region
   container_port     = var.container_port
-  ecr_repository_url = aws_ecr_repository.auth_service.repository_url
+  ecr_repository_url = local.ecr_repository_url
 
   vpc_id                = module.network.vpc_id
   public_subnet_ids     = module.network.public_subnet_ids
@@ -137,13 +167,12 @@ module "ecs" {
 }
 
 # ============================================================
-# PHASE 4 - Observability: dashboard + alarms
-# (uncomment in the Phase 4 pull request)
+# Observability: dashboard + alarms
 # ============================================================
 
 module "monitoring" {
   source = "./modules/monitoring"
-  #
+
   project_name   = var.project_name
   environment    = var.environment
   aws_region     = var.aws_region

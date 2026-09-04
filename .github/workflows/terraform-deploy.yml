@@ -13,9 +13,9 @@ on:
       - '.github/workflows/terraform-deploy.yml'
 
 permissions:
-  id-token: write      # mint the per-run OIDC token (keyless auth)
+  id-token: write
   contents: read
-  pull-requests: write # post the plan as a PR comment
+  pull-requests: write
 
 env:
   AWS_REGION: us-east-1
@@ -25,10 +25,14 @@ defaults:
     working-directory: terraform
 
 jobs:
-  # ---------- On every PR: quality gates + plan, posted for human review ----------
+  # ---------- On every PR: plan BOTH environments, one labeled comment each ----------
   plan:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, staging]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,16 +49,15 @@ jobs:
       - name: Format check
         run: terraform fmt -check -recursive
 
-      - name: Init
-        run: terraform init
+      - name: Init (env-scoped state)
+        run: terraform init -backend-config="key=fintech/${{ matrix.env }}/terraform.tfstate"
 
       - name: Validate
         run: terraform validate
 
       - name: Plan
-        id: plan
         run: |
-          terraform plan -var-file=environments/dev.tfvars -out=tfplan -no-color 2>&1 | tee plan.txt
+          terraform plan -var-file=environments/${{ matrix.env }}.tfvars -out=tfplan -no-color 2>&1 | tee plan.txt
 
       - name: Post plan as PR comment
         uses: actions/github-script@v7
@@ -65,7 +68,7 @@ jobs:
             if (plan.length > 60000) {
               plan = plan.substring(plan.length - 60000);
             }
-            const body = `### Terraform Plan\n\n<details><summary>Show plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n\n</details>\n\n*Review the plan. Merging this PR will apply it.*`;
+            const body = `### Terraform Plan — \`${{ matrix.env }}\`\n\n<details><summary>Show plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n\n</details>\n\n*Review the plan. Merging applies BOTH environments (dev first, then staging).*`;
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -73,10 +76,15 @@ jobs:
               body: body
             });
 
-  # ---------- On merge to main: saved-plan apply (executes exactly what was planned) ----------
+  # ---------- On merge: apply dev FIRST, then staging (sequential, fail-fast) ----------
   apply:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        env: [dev, staging]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -90,11 +98,11 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Init
-        run: terraform init
+      - name: Init (env-scoped state)
+        run: terraform init -backend-config="key=fintech/${{ matrix.env }}/terraform.tfstate"
 
       - name: Plan (saved)
-        run: terraform plan -var-file=environments/dev.tfvars -out=tfplan
+        run: terraform plan -var-file=environments/${{ matrix.env }}.tfvars -out=tfplan
 
       - name: Apply saved plan
         run: terraform apply tfplan
