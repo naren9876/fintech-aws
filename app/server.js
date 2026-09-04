@@ -11,6 +11,7 @@ const prometheus = require('prom-client');
 
 // Initialize Express app
 const app = express();
+app.set('trust proxy', 1); // behind ALB: derive client IP from X-Forwarded-For
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'your_secret_key';
 const JWT_EXPIRY = process.env.JWT_EXPIRY || '24h';
